@@ -10,7 +10,7 @@ info:
 # ie -Dlogging.level.org.springframework=DEBUG
 logging:
   level:
-    uk.gov.ons.ctp: ERROR
+    uk.gov.ons.ctp: DEBUG
     org.springframework: ERROR
   profile: CLOUD
   useJson: true
