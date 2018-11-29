@@ -316,7 +316,7 @@ public class CaseService {
     caseIacAudit.setCaseFK(updatedCase.getCasePK());
     caseIacAudit.setIac(updatedCase.getIac());
     caseIacAudit.setCreatedDateTime(DateTimeUtil.nowUTC());
-    caseIacAuditRepo.saveAndFlush(caseIacAudit);
+    caseIacAuditRepo.save(caseIacAudit);
   }
 
   /**

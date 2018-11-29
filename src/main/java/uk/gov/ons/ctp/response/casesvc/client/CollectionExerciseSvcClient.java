@@ -8,6 +8,7 @@ import java.util.UUID;
 import net.sourceforge.cobertura.CoverageIgnore;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
@@ -44,6 +45,7 @@ public class CollectionExerciseSvcClient {
    * @param collectionExerciseId the UUID to search by
    * @return the asscoaited CollectionExercise
    */
+  @Cacheable("collectionexercises")
   @Retryable(
       value = {RestClientException.class},
       maxAttemptsExpression = "#{${retries.maxAttempts}}",
@@ -57,7 +59,8 @@ public class CollectionExerciseSvcClient {
 
     HttpEntity<?> httpEntity = restUtility.createHttpEntity(null);
 
-    log.with("collection_exercise_id").debug("Retrieving collection exercise");
+    log.with("collection_exercise_id", collectionExerciseId)
+        .debug("Retrieving collection exercise");
     ResponseEntity<CollectionExerciseDTO> responseEntity =
         restTemplate.exchange(
             uriComponents.toUri(), HttpMethod.GET, httpEntity, CollectionExerciseDTO.class);

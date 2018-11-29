@@ -116,8 +116,8 @@ collection-exercise-svc:
     password: secret
 
 case-distribution:
-  retrieval-max: 50
-  delay-milli-seconds: 500
+  retrieval-max: 1000
+  delay-milli-seconds: 100
 
 redelivery-policy:
   maxRedeliveries: 10

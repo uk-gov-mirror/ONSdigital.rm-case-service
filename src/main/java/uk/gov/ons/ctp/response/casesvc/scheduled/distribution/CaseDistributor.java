@@ -3,7 +3,12 @@ package uk.gov.ons.ctp.response.casesvc.scheduled.distribution;
 import com.godaddy.logging.Logger;
 import com.godaddy.logging.LoggerFactory;
 import java.util.Arrays;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import net.sourceforge.cobertura.CoverageIgnore;
 import org.apache.commons.collections.CollectionUtils;
@@ -20,6 +25,7 @@ import uk.gov.ons.ctp.common.state.StateTransitionManager;
 import uk.gov.ons.ctp.response.casesvc.client.InternetAccessCodeSvcClient;
 import uk.gov.ons.ctp.response.casesvc.config.AppConfig;
 import uk.gov.ons.ctp.response.casesvc.domain.model.Case;
+import uk.gov.ons.ctp.response.casesvc.domain.repository.CaseIacAuditRepository;
 import uk.gov.ons.ctp.response.casesvc.domain.repository.CaseRepository;
 import uk.gov.ons.ctp.response.casesvc.message.CaseNotificationPublisher;
 import uk.gov.ons.ctp.response.casesvc.message.EventPublisher;
@@ -46,6 +52,8 @@ public class CaseDistributor {
 
   private static final String CASE_DISTRIBUTOR_LIST_ID = "case";
 
+  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(100);
+
   // this is a bit of a kludge - jpa does not like having an IN clause with an empty list
   // it does not return results when you expect it to - so ... always have this in the list of
   // excluded case ids
@@ -53,6 +61,7 @@ public class CaseDistributor {
 
   private AppConfig appConfig;
   private CaseRepository caseRepo;
+  private CaseIacAuditRepository caseIacAuditRepo;
   private CaseService caseService;
   private InternetAccessCodeSvcClient internetAccessCodeSvcClient;
   private DistributedListManager<Integer> caseDistributionListManager;
@@ -66,6 +75,7 @@ public class CaseDistributor {
       final AppConfig appConfig,
       final DistributedListManager<Integer> caseDistributionListManager,
       final CaseRepository caseRepo,
+      final CaseIacAuditRepository caseIacAuditRepo,
       final CaseService caseService,
       final InternetAccessCodeSvcClient internetAccessCodeSvcClient,
       final StateTransitionManager<CaseState, CaseDTO.CaseEvent> caseSvcStateTransitionManager,
@@ -73,6 +83,7 @@ public class CaseDistributor {
       final EventPublisher eventPublisher) {
     this.appConfig = appConfig;
     this.caseRepo = caseRepo;
+    this.caseIacAuditRepo = caseIacAuditRepo;
     this.caseService = caseService;
     this.internetAccessCodeSvcClient = internetAccessCodeSvcClient;
     this.caseDistributionListManager = caseDistributionListManager;
@@ -92,8 +103,8 @@ public class CaseDistributor {
     log.debug("CaseDistributor awoken...");
 
     CaseDistributionInfo distInfo = new CaseDistributionInfo();
-    int successes = 0;
-    int failures = 0;
+    AtomicInteger successes = new AtomicInteger();
+    AtomicInteger failures = new AtomicInteger();
 
     try {
       List<Case> cases = retrieveCases();
@@ -106,22 +117,35 @@ public class CaseDistributor {
 
           if (!CollectionUtils.isEmpty(codes)) {
             if (nbRetrievedCases == codes.size()) {
-              for (int idx = 0; idx < nbRetrievedCases; idx++) {
-                Case caze = cases.get(idx);
-                try {
-                  processCase(caze, codes.get(idx));
-                  successes++;
-                } catch (Exception e) {
-                  log.with("case", caze)
-                      .error("Exception thrown processing case. Processing postponed", e);
-                  failures++;
-                }
+              List<Callable<Boolean>> callables = new LinkedList<>();
+
+              for (int i = 0; i < nbRetrievedCases; i++) {
+                final int idx = i;
+                callables.add(
+                    () -> {
+                      Case caze = cases.get(idx);
+                      try {
+                        processCase(caze, codes.get(idx));
+                        successes.incrementAndGet();
+                      } catch (Exception e) {
+                        log.with("case", caze)
+                            .error("Exception thrown processing case. Processing postponed", e);
+                        failures.incrementAndGet();
+                      }
+                      return Boolean.TRUE;
+                    });
               }
+
+              // Kinda handy if you remember to do this NICK YOU STUPID DUMBASS
+              EXECUTOR_SERVICE.invokeAll(callables);
+
+              caseRepo.flush();
+              caseIacAuditRepo.flush();
             }
           }
 
-          distInfo.setCasesSucceeded(successes);
-          distInfo.setCasesFailed(failures);
+          distInfo.setCasesSucceeded(successes.get());
+          distInfo.setCasesFailed(failures.get());
         } catch (Exception e) {
           log.error("Failed to obtain IAC codes", e);
         }
@@ -215,7 +239,7 @@ public class CaseDistributor {
 
     Case updatedCase = transitionCase(caze, event);
     updatedCase.setIac(iac);
-    caseRepo.saveAndFlush(updatedCase);
+    caseRepo.save(updatedCase);
 
     caseService.saveCaseIacAudit(updatedCase);
 
