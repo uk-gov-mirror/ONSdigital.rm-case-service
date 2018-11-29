@@ -52,7 +52,7 @@ public class CaseDistributor {
 
   private static final String CASE_DISTRIBUTOR_LIST_ID = "case";
 
-  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(100);
+  private static final ExecutorService EXECUTOR_SERVICE = Executors.newFixedThreadPool(50);
 
   // this is a bit of a kludge - jpa does not like having an IN clause with an empty list
   // it does not return results when you expect it to - so ... always have this in the list of
