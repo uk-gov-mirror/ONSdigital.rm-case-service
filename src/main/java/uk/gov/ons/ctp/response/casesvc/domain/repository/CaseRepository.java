@@ -2,6 +2,7 @@ package uk.gov.ons.ctp.response.casesvc.domain.repository;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.repository.query.Param;
@@ -26,6 +27,8 @@ public interface CaseRepository extends JpaRepository<Case, Integer> {
    */
   List<Case> findByStateInAndCasePKNotIn(
       List<CaseState> states, List<Integer> casePKs, Pageable pageable);
+
+  Stream<Case> findByStateIn(List<CaseState> states);
 
   /**
    * Find cases assigned to the given casegroupid

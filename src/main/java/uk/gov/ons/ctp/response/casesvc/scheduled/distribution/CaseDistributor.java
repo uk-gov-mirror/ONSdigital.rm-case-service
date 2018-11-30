@@ -5,11 +5,13 @@ import com.godaddy.logging.LoggerFactory;
 import java.util.Arrays;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import net.sourceforge.cobertura.CoverageIgnore;
 import org.apache.commons.collections.CollectionUtils;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +20,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Sort.Direction;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import uk.gov.ons.ctp.common.distributed.DistributedListManager;
 import uk.gov.ons.ctp.common.distributed.LockingException;
 import uk.gov.ons.ctp.common.error.CTPException;
@@ -68,6 +71,7 @@ public class CaseDistributor {
   private StateTransitionManager<CaseState, CaseDTO.CaseEvent> caseSvcStateTransitionManager;
   private CaseNotificationPublisher notificationPublisher;
   private EventPublisher eventPublisher;
+  private Queue<String> iacCodes = new LinkedList<>();
 
   /** Constructor for CaseDistributor */
   @Autowired
@@ -92,6 +96,15 @@ public class CaseDistributor {
     this.eventPublisher = eventPublisher;
   }
 
+  private synchronized String getIacCode() {
+    if (iacCodes.isEmpty()) {
+      log.debug("Getting some IAC codes");
+      iacCodes.addAll(internetAccessCodeSvcClient.generateIACs(1000));
+    }
+
+    return iacCodes.remove();
+  }
+
   /**
    * wake up on schedule and check for cases that are in INIT state - fetch IACs for them, adding
    * the IAC to the case questionnaire, and send a notificaiton of the activation to the action
@@ -99,65 +112,53 @@ public class CaseDistributor {
    *
    * @return the info for the health endpoint regarding the distribution just performed
    */
-  public final CaseDistributionInfo distribute() {
+  @Transactional
+  public CaseDistributionInfo distribute() {
     log.debug("CaseDistributor awoken...");
 
     CaseDistributionInfo distInfo = new CaseDistributionInfo();
     AtomicInteger successes = new AtomicInteger();
     AtomicInteger failures = new AtomicInteger();
 
-    try {
-      List<Case> cases = retrieveCases();
+    List<Callable<Boolean>> callables = new LinkedList<>();
 
-      if (!CollectionUtils.isEmpty(cases)) {
-        int nbRetrievedCases = cases.size();
+    try (Stream<Case> cases =
+        caseRepo.findByStateIn(Arrays.asList(CaseState.SAMPLED_INIT, CaseState.REPLACEMENT_INIT))) {
 
-        try {
-          List<String> codes = internetAccessCodeSvcClient.generateIACs(nbRetrievedCases);
+      cases.forEach(
+          caze -> {
+            callables.add(
+                () -> {
+                  try {
+                    processCase(caze, getIacCode());
+                    if (successes.incrementAndGet() % 500 == 0) {
+                      log.info("Distributed {} cases", successes.get());
+                    }
+                  } catch (Exception e) {
+                    log.with("case", caze)
+                        .error("Exception thrown processing case. Processing postponed", e);
+                    failures.incrementAndGet();
+                  }
+                  return Boolean.TRUE;
+                });
+          });
 
-          if (!CollectionUtils.isEmpty(codes)) {
-            if (nbRetrievedCases == codes.size()) {
-              List<Callable<Boolean>> callables = new LinkedList<>();
+      // Kinda handy if you remember to do this NICK YOU STUPID DUMBASS
+      EXECUTOR_SERVICE.invokeAll(callables);
 
-              for (int i = 0; i < nbRetrievedCases; i++) {
-                final int idx = i;
-                callables.add(
-                    () -> {
-                      Case caze = cases.get(idx);
-                      try {
-                        processCase(caze, codes.get(idx));
-                        successes.incrementAndGet();
-                      } catch (Exception e) {
-                        log.with("case", caze)
-                            .error("Exception thrown processing case. Processing postponed", e);
-                        failures.incrementAndGet();
-                      }
-                      return Boolean.TRUE;
-                    });
-              }
+      caseRepo.flush();
+      caseIacAuditRepo.flush();
 
-              // Kinda handy if you remember to do this NICK YOU STUPID DUMBASS
-              EXECUTOR_SERVICE.invokeAll(callables);
-
-              caseRepo.flush();
-              caseIacAuditRepo.flush();
-            }
-          }
-
-          distInfo.setCasesSucceeded(successes.get());
-          distInfo.setCasesFailed(failures.get());
-        } catch (Exception e) {
-          log.error("Failed to obtain IAC codes", e);
-        }
-      }
+      distInfo.setCasesSucceeded(successes.get());
+      distInfo.setCasesFailed(failures.get());
     } catch (Exception e) {
       log.error("Failed to process cases", e);
     } finally {
-      try {
-        caseDistributionListManager.deleteList(CASE_DISTRIBUTOR_LIST_ID, true);
-      } catch (LockingException e) {
-        log.error("Failed to release caseDistributionListManager", e);
-      }
+      //      try {
+      //        caseDistributionListManager.deleteList(CASE_DISTRIBUTOR_LIST_ID, true);
+      //      } catch (LockingException e) {
+      //        log.error("Failed to release caseDistributionListManager", e);
+      //      }
     }
 
     log.debug("CaseDistributor sleeping");

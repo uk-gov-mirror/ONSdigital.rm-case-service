@@ -55,32 +55,27 @@ spring:
   application:
     name: ONS CaseService
   datasource:
-    type: com.zaxxer.hikari.HikariDataSource
     url: jdbc:postgresql://localhost:6432/postgres
     username: postgres
     password: postgres
     driverClassName: org.postgresql.Driver
     continue-on-error: true
-    hikari:
-      minimum-idle: 1
-      maximum-pool-size: 20
-      auto-commit: false
+    tomcat:
+      initial-size: 5
+      max-active: 20
+      max-idle: 5
+      min-idle: 3
   zipkin:
     baseUrl: http://localhost:9411
     enabled: false
 
   jpa:
-    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    database-platform: org.hibernate.dialect.PostgreSQL94Dialect
     show-sql: false
     properties:
       hibernate:
-        ddl-auto: update
+        ddl-auto: none
         default_schema: casesvc
-    hibernate:
-      ddl-auto: update
-      default_schema: casesvc
-      connection:
-        provider_class: org.hibernate.hikaricp.internal.HikariCPConnectionProvider
 
 data-grid:
   address: localhost:7379
@@ -122,7 +117,7 @@ collection-exercise-svc:
 
 case-distribution:
   retrieval-max: 1000
-  delay-milli-seconds: 100
+  delay-milli-seconds: 1000
 
 redelivery-policy:
   maxRedeliveries: 10
